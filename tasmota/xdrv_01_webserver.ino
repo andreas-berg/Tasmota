@@ -39,11 +39,11 @@
 #endif
 
 #ifndef RESTART_AFTER_INITIAL_WIFI_CONFIG
-#define RESTART_AFTER_INITIAL_WIFI_CONFIG         true   // Restart Tasmota after initial Wifi Config of a blank device
+#define RESTART_AFTER_INITIAL_WIFI_CONFIG         false   // Restart Tasmota after initial Wifi Config of a blank device
 #endif                                                   //   If disabled, Tasmota will keep both the wifi AP and the wifi connection to the router
                                                          //   but only until next restart.
 #ifndef AFTER_INITIAL_WIFI_CONFIG_GO_TO_NEW_IP           // If RESTART_AFTER_INITIAL_WIFI_CONFIG and AFTER_INITIAL_WIFI_CONFIG_GO_TO_NEW_IP are true,
-#define AFTER_INITIAL_WIFI_CONFIG_GO_TO_NEW_IP    true   //   the user will be redirected to the new IP of Tasmota (in the new Network).
+#define AFTER_INITIAL_WIFI_CONFIG_GO_TO_NEW_IP    false   //   the user will be redirected to the new IP of Tasmota (in the new Network).
 #endif                                                   //   If the first is true, but this is false, the device will restart but the user will see
                                                          //   a window telling that the WiFi Configuration was Ok and that the window can be closed.
 
@@ -110,6 +110,7 @@ const char HTTP_SCRIPT_WIFI[] PROGMEM =
   "function c(l){"
     "eb('s1').value=l.innerText||l.textContent;"
     "eb('p1').focus();"
+    "eb('p1').select();"
   "}";
 
 const char HTTP_SCRIPT_HIDE[] PROGMEM =
@@ -299,12 +300,35 @@ const char HTTP_FORM_MODULE[] PROGMEM =
 
 const char HTTP_FORM_WIFI_PART1[] PROGMEM =
   "<fieldset><legend><b>&nbsp;" D_WIFI_PARAMETERS "&nbsp;</b></legend>"
-  "<form method='get' action='wi'>"
-  "<p><b>" D_AP1_SSID "</b>%s<br><input id='s1' placeholder=\"" D_AP1_SSID_HELP "\" value=\"%s\"></p>"  // Need \" instead of ' to be able to use ' in text (#8489)
-  "<p><label><b>" D_AP_PASSWORD "</b><input type='checkbox' onclick='sp(\"p1\")'></label><br><input id='p1' type='password' placeholder=\"" D_AP_PASSWORD_HELP "\"";
+  "<form method='get' action='wi'>";
 
-const char HTTP_FORM_WIFI_PART2[] PROGMEM =
-  " value=\"" D_ASTERISK_PWD "\"></p>"
+const char HTTP_FORM_WIFI_PART2_MODE[] PROGMEM = // TODO: minimize this js
+  "<input type='checkbox' name='wm' value='1' onclick='st(this)'>STA</input>"
+  "<input type='checkbox' name='wm' value='3' onclick='st(this)'>STA and AP</input>"
+  // "<input type='checkbox' name='wm' value='2' onclick='st(this)'>AP Only</input>"
+  "<p id='wmt' />"
+  "<script>"
+  "function st(i){"
+  "  var mds = {"
+  "      '1': 'Connect this device to the network(s) specifed (SSID & PW).',"
+  "      '3': 'Both connect to a Wifi network and provide an Access Point.',"
+  // "      '2': 'Only provide Access Point and Web interface. Networking (e.g. MQTT) is disabled'"
+  "    };"
+  "  Array.prototype.forEach.call(document.getElementsByName('wm'),function(e){e.checked=(e==i)?1:0;});"
+  "  document.getElementById('wmt').innerText = mds[i.value];"
+  // "  document.getElementById('s1').disabled = (id.value === '2')?1:0;"  // disable ssid&pwd input fields when APOnly mode selected
+  // "  document.getElementById('p1').disabled = (id.value === '2')?1:0;"
+  // "  document.getElementById('s2').disabled = (id.value === '2')?1:0;"
+  // "  document.getElementById('p2').disabled = (id.value === '2')?1:0;"
+  "}"
+  "st(document.getElementsByName('wm')[0]);"
+  "</script>";
+
+const char HTTP_FORM_WIFI_PART3_AP1[] PROGMEM =
+  "<p><b>" D_AP1_SSID "</b>%s<br><input id='s1' placeholder=\"" D_AP1_SSID_HELP "\" value=\"%s\"></p>"  // Need \" instead of ' to be able to use ' in text (#8489)
+  "<p><label><b>" D_AP_PASSWORD "</b><input type='checkbox' onclick='sp(\"p1\")'></label><br><input id='p1' type='password' placeholder=\"" D_AP_PASSWORD_HELP "\" value=\"" D_ASTERISK_PWD "\"></p>";
+
+const char HTTP_FORM_WIFI_PART4_AP2[] PROGMEM =
   "<p><b>" D_AP2_SSID "</b> (" STA_SSID2 ")<br><input id='s2' placeholder=\"" D_AP2_SSID_HELP "\" value=\"%s\"></p>"
   "<p><label><b>" D_AP_PASSWORD "</b><input type='checkbox' onclick='sp(\"p2\")'></label><br><input id='p2' type='password' placeholder=\"" D_AP_PASSWORD_HELP "\" value=\"" D_ASTERISK_PWD "\"></p>"
   "<p><b>" D_HOSTNAME "</b> (%s)<br><input id='h' placeholder=\"%s\" value=\"%s\"></p>"
@@ -415,7 +439,6 @@ const char kUploadErrors[] PROGMEM =
 
 const uint16_t DNS_PORT = 53;
 enum HttpOptions {HTTP_OFF, HTTP_USER, HTTP_ADMIN, HTTP_MANAGER, HTTP_MANAGER_RESET_ONLY};
-enum WifiTestOptions {WIFI_NOT_TESTING, WIFI_TESTING, WIFI_TEST_FINISHED, WIFI_TEST_FINISHED_BAD};
 
 enum WebCmndStatus { WEBCMND_DONE=0, WEBCMND_WRONG_PARAMETERS, WEBCMND_CONNECT_FAILED, WEBCMND_HOST_NOT_FOUND, WEBCMND_MEMORY_ERROR
 #ifdef USE_WEBGETCONFIG
@@ -434,12 +457,12 @@ struct WEB {
   uint8_t config_block_count = 0;
   bool upload_services_stopped = false;
   bool reset_web_log_flag = false;                  // Reset web console log
-  bool initial_config = false;
-  uint8_t wifiTest = WIFI_NOT_TESTING;
-  uint8_t wifi_test_counter = 0;
+  // bool initial_config = false;
+  // uint8_t wifiTest = WIFI_NOT_TESTING;
+  // uint8_t wifi_test_counter = 0;
   uint16_t save_data_counter = 0;
-  uint8_t old_wificonfig = MAX_WIFI_OPTION; // means "nothing yet saved here"
-  bool wifi_test_AP_TIMEOUT = false;
+  // uint8_t old_wificonfig = MAX_WIFI_OPTION; // means "nothing yet saved here"
+  // bool wifi_test_AP_TIMEOUT = false;
 } Web;
 
 // Helper function to avoid code duplication (saves 4k Flash)
@@ -625,12 +648,12 @@ void StopWebserver(void)
 void WifiManagerBegin(bool reset_only)
 {
   // setup AP
-  if (!Web.initial_config) { AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_WCFG_2_WIFIMANAGER " " D_ACTIVE_FOR_3_MINUTES)); }
+  if (!Wifi.initial_config) { AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_WCFG_2_WIFIMANAGER " " D_ACTIVE_FOR_3_MINUTES)); }
   if (!TasmotaGlobal.global_state.wifi_down) {
-    WifiSetMode(WIFI_AP_STA);
+    WifiSetMode(WIFI_AP_STA, WIFI_SOFT_AP_CHANNEL);
     AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI D_WIFIMANAGER_SET_ACCESSPOINT_AND_STATION));
   } else {
-    WifiSetMode(WIFI_AP);
+    WifiSetMode(WIFI_AP, WIFI_SOFT_AP_CHANNEL);
     AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI D_WIFIMANAGER_SET_ACCESSPOINT));
   }
 
@@ -837,7 +860,7 @@ void WSContentStart_P(const char* title) {
 }
 
 void WSContentSendStyle_P(const char* formatP, ...) {
-  if ( WifiIsInManagerMode() && (!Web.initial_config) ) {
+  if ( WifiIsInManagerMode() && (!Wifi.initial_config) ) {
     if (WifiConfigCounter()) {
       WSContentSend_P(HTTP_SCRIPT_COUNTER);
     }
@@ -864,13 +887,13 @@ void WSContentSendStyle_P(const char* formatP, ...) {
   WebColor(COL_TEXT_WARNING),
 #endif
   WebColor(COL_TITLE),
-  (Web.initial_config) ? "" : ModuleName().c_str(), SettingsText(SET_DEVICENAME));
+  (Wifi.initial_config) ? "" : ModuleName().c_str(), SettingsText(SET_DEVICENAME));
 
   // SetOption53 - Show hostname and IP address in GUI main menu
 #if (RESTART_AFTER_INITIAL_WIFI_CONFIG)
   if (Settings->flag3.gui_hostname_ip) {
 #else
-  if ( Settings->flag3.gui_hostname_ip || ( (WiFi.getMode() == WIFI_AP_STA) && (!Web.initial_config) )  ) {
+  if ( Settings->flag3.gui_hostname_ip || ( (WiFi.getMode() == WIFI_AP_STA) && (!Wifi.initial_config) )  ) {
 #endif
     bool lip = (static_cast<uint32_t>(WiFi.localIP()) != 0);
     bool sip = (static_cast<uint32_t>(WiFi.softAPIP()) != 0);
@@ -946,7 +969,7 @@ void WSContentEnd(void) {
 }
 
 void WSContentStop(void) {
-  if ( WifiIsInManagerMode() && (!Web.initial_config) ) {
+  if ( WifiIsInManagerMode() && (!Wifi.initial_config) ) {
     if (WifiConfigCounter()) {
       WSContentSend_P(HTTP_COUNTER);
     }
@@ -1068,34 +1091,34 @@ void WebSliderColdWarm(void)
 
 void HandleRoot(void)
 {
-#ifndef NO_CAPTIVE_PORTAL
-  if (CaptivePortal()) { return; }  // If captive portal redirect instead of displaying the page.
-#endif  // NO_CAPTIVE_PORTAL
+// #ifndef NO_CAPTIVE_PORTAL
+//   if (CaptivePortal()) { return; }  // If captive portal redirect instead of displaying the page.
+// #endif  // NO_CAPTIVE_PORTAL
 
   if (Webserver->hasArg(F("rst"))) {
     WebRestart(0);
     return;
   }
 
-  if (WifiIsInManagerMode()) {
-#ifndef FIRMWARE_MINIMAL
-    if (strlen(SettingsText(SET_WEBPWD)) && !(Webserver->hasArg(F("USER1"))) && !(Webserver->hasArg(F("PASS1"))) && HTTP_MANAGER_RESET_ONLY != Web.state) {
-      HandleWifiLogin();
-    } else {
-      if (!strlen(SettingsText(SET_WEBPWD)) || (((Webserver->arg(F("USER1")) == WEB_USERNAME ) && (Webserver->arg(F("PASS1")) == SettingsText(SET_WEBPWD) )) || HTTP_MANAGER_RESET_ONLY == Web.state)) {
-        if (!Web.initial_config) {
-          Web.initial_config = !strlen(SettingsText(SET_STASSID1));
-          if (Web.initial_config) { AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_HTTP "Blank Device - Initial Configuration")); }
-        }
-        HandleWifiConfiguration();
-      } else {
-        // wrong user and pass
-        HandleWifiLogin();
-      }
-    }
-#endif  // Not FIRMWARE_MINIMAL
-    return;
-  }
+//   if (WifiIsInManagerMode()) {
+// #ifndef FIRMWARE_MINIMAL
+//     if (strlen(SettingsText(SET_WEBPWD)) && !(Webserver->hasArg(F("USER1"))) && !(Webserver->hasArg(F("PASS1"))) && HTTP_MANAGER_RESET_ONLY != Web.state) {
+//       HandleWifiLogin();
+//     } else {
+//       if (!strlen(SettingsText(SET_WEBPWD)) || (((Webserver->arg(F("USER1")) == WEB_USERNAME ) && (Webserver->arg(F("PASS1")) == SettingsText(SET_WEBPWD) )) || HTTP_MANAGER_RESET_ONLY == Web.state)) {
+//         if (!Wifi.initial_config) {
+//           Wifi.initial_config = !strlen(SettingsText(SET_STASSID1));
+//           if (Wifi.initial_config) { AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_HTTP "Blank Device - Initial Configuration")); }
+//         }
+//         HandleWifiConfiguration();
+//       } else {
+//         // wrong user and pass
+//         HandleWifiLogin();
+//       }
+//     }
+// #endif  // Not FIRMWARE_MINIMAL
+//     return;
+//   }
 
   if (HandleRootStatusRefresh()) {
     return;
@@ -1854,32 +1877,35 @@ void HandleWifiConfiguration(void) {
       // Test WIFI Connection to Router
       // As Tasmota is in this case in AP mode, a STA connection can be established too at the same time
 
-      if (WIFI_NOT_TESTING == Web.wifiTest) {
-        if (MAX_WIFI_OPTION == Web.old_wificonfig) { Web.old_wificonfig = Settings->sta_config; }
-        TasmotaGlobal.wifi_state_flag = Settings->sta_config = WIFI_MANAGER;
-        Web.save_data_counter = TasmotaGlobal.save_data_counter;
-      }
+//       if (WIFI_NOT_TESTING == Wifi.wifiTest) {
+//         if (MAX_WIFI_OPTION == Wifi.old_wificonfig) { Wifi.old_wificonfig = Settings->sta_config; }
+//         TasmotaGlobal.wifi_state_flag = Settings->sta_config = WIFI_MANAGER;
+//         Web.save_data_counter = TasmotaGlobal.save_data_counter;
+//       }
 
-      Web.wifi_test_counter = 9;   // seconds to test user's proposed AP
-      Web.wifiTest = WIFI_TESTING;
-      TasmotaGlobal.save_data_counter = 0;               // Stop auto saving data - Updating Settings
-      Settings->save_data = 0;
-      TasmotaGlobal.sleep = 0;                           // Disable sleep
-      TasmotaGlobal.restart_flag = 0;                    // No restart
-      TasmotaGlobal.ota_state_flag = 0;                  // No OTA
-//      TasmotaGlobal.blinks = 0;                          // Disable blinks initiated by WifiManager
+//       Wifi.wifi_test_counter = 9;   // seconds to test user's proposed AP
+//       Wifi.wifiTest = WIFI_TESTING;
+//       TasmotaGlobal.save_data_counter = 0;               // Stop auto saving data - Updating Settings
+//       Settings->save_data = 0;
+//       TasmotaGlobal.sleep = 0;                           // Disable sleep
+//       TasmotaGlobal.restart_flag = 0;                    // No restart
+//       TasmotaGlobal.ota_state_flag = 0;                  // No OTA
+// //      TasmotaGlobal.blinks = 0;                          // Disable blinks initiated by WifiManager
 
-      WebGetArg(PSTR("s1"), tmp, sizeof(tmp));   // SSID1
-      SettingsUpdateText(SET_STASSID1, tmp);
-      WebGetArg(PSTR("p1"), tmp, sizeof(tmp));   // PASSWORD1
-      SettingsUpdateText(SET_STAPWD1, tmp);
+//       WebGetArg(PSTR("s1"), tmp, sizeof(tmp));   // SSID1
+//       SettingsUpdateText(SET_STASSID1, tmp);
+//       WebGetArg(PSTR("p1"), tmp, sizeof(tmp));   // PASSWORD1
+//       SettingsUpdateText(SET_STAPWD1, tmp);
 
-      AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECTING_TO_AP " %s " D_AS " %s ..."),
-        SettingsText(SET_STASSID1), TasmotaGlobal.hostname);
+//       AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECTING_TO_AP " '%s' " D_AS " '%s' PW '%s'..."),
+//         SettingsText(SET_STASSID1), TasmotaGlobal.hostname, SettingsText(SET_STAPWD1));
 
-      WiFi.begin(SettingsText(SET_STASSID1), SettingsText(SET_STAPWD1));
+//       WiFi.begin(SettingsText(SET_STASSID1), SettingsText(SET_STAPWD1));
 
-      WebRestart(2);
+//       WebRestart(2);
+      WifiSaveSettings();
+      WebRestart(1);
+
     } else {
       // STATION MODE or MIXED
       // Save the config and restart
@@ -1889,23 +1915,23 @@ void HandleWifiConfiguration(void) {
     return;
   }
 
-  if ( WIFI_TEST_FINISHED == Web.wifiTest ) {
-    Web.wifiTest = WIFI_NOT_TESTING;
-    if (Web.wifi_test_AP_TIMEOUT) {
-      WebRestart(1); // Save credentials and Force Restart in STA only mode (11n-only routers)
-    } else {
-#if (RESTART_AFTER_INITIAL_WIFI_CONFIG)
-      WebRestart(3);
-#else
-      HandleRoot();
-#endif
-    }
-  }
+//   if ( WIFI_TEST_FINISHED == Wifi.wifiTest ) {
+//     Wifi.wifiTest = WIFI_NOT_TESTING;
+//     if (Wifi.wifi_test_AP_TIMEOUT) {
+//       WebRestart(1); // Save credentials and Force Restart in STA only mode (11n-only routers)
+//     } else {
+// #if (RESTART_AFTER_INITIAL_WIFI_CONFIG)
+//       WebRestart(3);
+// #else
+//       HandleRoot();
+// #endif
+//     }
+//   }
 
   WSContentStart_P(PSTR(D_CONFIGURE_WIFI), !WifiIsInManagerMode());
   WSContentSend_P(HTTP_SCRIPT_WIFI);
-  if (WifiIsInManagerMode()) { WSContentSend_P(HTTP_SCRIPT_HIDE); }
-  if (WIFI_TESTING == Web.wifiTest) { WSContentSend_P(HTTP_SCRIPT_RELOAD_TIME, HTTP_RESTART_RECONNECT_TIME); }
+  // if (WifiIsInManagerMode()) { WSContentSend_P(HTTP_SCRIPT_HIDE); }
+  if (WIFI_TESTING == Wifi.wifiTest) { WSContentSend_P(HTTP_SCRIPT_RELOAD_TIME, HTTP_RESTART_RECONNECT_TIME); }
 #ifdef USE_ENHANCED_GUI_WIFI_SCAN
   WSContentSendStyle_P(HTTP_HEAD_STYLE_SSI, WebColor(COL_TEXT));
 #else
@@ -1914,7 +1940,7 @@ void HandleWifiConfiguration(void) {
 
   bool limitScannedNetworks = true;
   if (HTTP_MANAGER_RESET_ONLY != Web.state) {
-    if (WIFI_TESTING == Web.wifiTest) {
+    if (WIFI_TESTING == Wifi.wifiTest) {
       limitScannedNetworks = false;
     } else {
       if (Webserver->hasArg(F("scan"))) { limitScannedNetworks = false; }
@@ -2048,18 +2074,15 @@ void HandleWifiConfiguration(void) {
     }
 
     WSContentSend_P(PSTR("<div><a href='/wi?scan='>%s</a></div><br>"), (limitScannedNetworks) ? PSTR(D_SHOW_MORE_WIFI_NETWORKS) : PSTR(D_SCAN_FOR_WIFI_NETWORKS));
-    WSContentSend_P(HTTP_FORM_WIFI_PART1, (WifiIsInManagerMode()) ? "" : PSTR(" (" STA_SSID1 ")"), SettingsText(SET_STASSID1));
-    if (WifiIsInManagerMode()) {
+    WSContentSend_P(HTTP_FORM_WIFI_PART1);
+    WSContentSend_P(HTTP_FORM_WIFI_PART2_MODE);
+    WSContentSend_P(HTTP_FORM_WIFI_PART3_AP1, (WifiIsInManagerMode()) ? "" : PSTR(" (" STA_SSID1 ")"), SettingsText(SET_STASSID1));
       // As WIFI_HOSTNAME may contain %s-%04d it cannot be part of HTTP_FORM_WIFI where it will exception
-      WSContentSend_P(PSTR("></p>"));
-    } else {
 #ifdef USE_CORS
-      WSContentSend_P(HTTP_FORM_WIFI_PART2, SettingsText(SET_STASSID2), WIFI_HOSTNAME, WIFI_HOSTNAME, SettingsText(SET_HOSTNAME), SettingsText(SET_CORS));
+      WSContentSend_P(HTTP_FORM_WIFI_PART4_AP2, SettingsText(SET_STASSID2), WIFI_HOSTNAME, WIFI_HOSTNAME, SettingsText(SET_HOSTNAME), SettingsText(SET_CORS));
 #else
-      WSContentSend_P(HTTP_FORM_WIFI_PART2, SettingsText(SET_STASSID2), WIFI_HOSTNAME, WIFI_HOSTNAME, SettingsText(SET_HOSTNAME));
+      WSContentSend_P(HTTP_FORM_WIFI_PART4_AP2, SettingsText(SET_STASSID2), WIFI_HOSTNAME, WIFI_HOSTNAME, SettingsText(SET_HOSTNAME));
 #endif
-    }
-
     WSContentSend_P(HTTP_FORM_END);
   }
 
@@ -2068,19 +2091,20 @@ void HandleWifiConfiguration(void) {
     WSContentTextCenterStart(WebColor(COL_TEXT_WARNING));
     WSContentSend_P(PSTR("<h3>"));
 
-    if (WIFI_TESTING == Web.wifiTest) {
-      WSContentSend_P(PSTR(D_TRYING_TO_CONNECT "<br>%s</h3></div>"), SettingsText(SET_STASSID1));
-    } else if (WIFI_TEST_FINISHED_BAD == Web.wifiTest) {
-      WSContentSend_P(PSTR(D_CONNECT_FAILED_TO " %s<br>" D_CHECK_CREDENTIALS "</h3></div>"), SettingsText(SET_STASSID1));
-    }
+    // if (WIFI_TESTING == Wifi.wifiTest) {
+    //   WSContentSend_P(PSTR(D_TRYING_TO_CONNECT "<br>%s</h3></div>"), SettingsText(SET_STASSID1));
+    // } else if (WIFI_TEST_FINISHED_BAD == Wifi.wifiTest) {
+    //   WSContentSend_P(PSTR(D_CONNECT_FAILED_TO " %s<br>" D_CHECK_CREDENTIALS "</h3></div>"), SettingsText(SET_STASSID1));
+    // }
     // More Options Button
     WSContentSend_P(PSTR("<div id=butmod style=\"display:%s;\"></div><p><form id=butmo style=\"display:%s;\"><button type='button' onclick='hidBtns()'>" D_SHOW_MORE_OPTIONS "</button></form></p>"),
-      (WIFI_TEST_FINISHED_BAD == Web.wifiTest) ? "none" : Web.initial_config ? "block" : "none", Web.initial_config ? "block" : "none"
+      (WIFI_TEST_FINISHED_BAD == Wifi.wifiTest) ? "none" : Wifi.initial_config ? "block" : "none", Wifi.initial_config ? "block" : "none"
     );
-    WSContentSpaceButton(BUTTON_RESTORE, !Web.initial_config);
-    WSContentButton(BUTTON_RESET_CONFIGURATION, !Web.initial_config);
+    WSContentSpaceButton(BUTTON_RESTORE, !Wifi.initial_config);
+    WSContentButton(BUTTON_RESET_CONFIGURATION, !Wifi.initial_config);
 #endif  // FIRMWARE_MINIMAL
-    WSContentSpaceButton(BUTTON_RESTART, !Web.initial_config);
+    WSContentSpaceButton(BUTTON_RESTART, !Wifi.initial_config);
+    WSContentSpaceButton(BUTTON_CONFIGURATION);
   } else {
     WSContentSpaceButton(BUTTON_CONFIGURATION);
   }
@@ -2097,6 +2121,7 @@ void WifiSaveSettings(void) {
   cmnd += AddWebCommand(PSTR(D_CMND_SSID "2"), PSTR("s2"), PSTR("1"));
   cmnd += AddWebCommand(PSTR(D_CMND_PASSWORD "3"), PSTR("p1"), PSTR("\""));
   cmnd += AddWebCommand(PSTR(D_CMND_PASSWORD "4"), PSTR("p2"), PSTR("\""));
+  cmnd += AddWebCommand(PSTR(D_CMND_WIFIMODE), PSTR("wm"), PSTR("1"));
   ExecuteWebCommand((char*)cmnd.c_str());
 }
 
@@ -3449,69 +3474,69 @@ bool Xdrv01(uint8_t function)
 #endif  // USE_EMULATION
       break;
     case FUNC_EVERY_SECOND:
-      if (Web.initial_config) {
-        Wifi.config_counter = 200;    // Do not restart the device if it has SSId Blank
-      }
-      if (Web.wifi_test_counter) {
-        Web.wifi_test_counter--;
-        AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI D_TRYING_TO_CONNECT " %s"), SettingsText(SET_STASSID1));
-        if ( WifiCheck_hasIP(WiFi.localIP()) ) {  // Got IP - Connection Established
-          Web.wifi_test_AP_TIMEOUT = false;
-          Web.wifi_test_counter = 0;
-          Web.wifiTest = WIFI_TEST_FINISHED;
-          AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CMND_SSID "1 %s: " D_CONNECTED " - " D_IP_ADDRESS " %_I"), SettingsText(SET_STASSID1), (uint32_t)WiFi.localIP());
-//          TasmotaGlobal.blinks = 255;                    // Signal wifi connection with blinks
-          if (MAX_WIFI_OPTION != Web.old_wificonfig) {
-            TasmotaGlobal.wifi_state_flag = Settings->sta_config = Web.old_wificonfig;
-          }
-          TasmotaGlobal.save_data_counter = Web.save_data_counter;
-          Settings->save_data = Web.save_data_counter;
-          SettingsSaveAll();
-#if (!RESTART_AFTER_INITIAL_WIFI_CONFIG)
-          Web.initial_config = false;
-          Web.state = HTTP_ADMIN;
-#endif
-        } else if (!Web.wifi_test_counter) { // Test TimeOut
-          Web.wifi_test_counter = 0;
-          Web.wifiTest = WIFI_TEST_FINISHED_BAD;
-          switch (WiFi.status()) {
-            case WL_CONNECTED:
-              AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECT_FAILED_NO_IP_ADDRESS));
-              Web.wifi_test_AP_TIMEOUT = false;
-              break;
-            case WL_NO_SSID_AVAIL:
-              AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECT_FAILED_AP_NOT_REACHED));
-              Web.wifi_test_AP_TIMEOUT = false;
-              break;
-            case WL_CONNECT_FAILED:
-              AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECT_FAILED_WRONG_PASSWORD));
-              Web.wifi_test_AP_TIMEOUT = false;
-              break;
-            default:  // WL_IDLE_STATUS and WL_DISCONNECTED - SSId in range but no answer from the router
-              AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECT_FAILED_AP_TIMEOUT));
-              // If this error occurs twice, Tasmota will connect directly to the router without testing crendentials.
-              //   ESP8266 in AP+STA mode can manage only 11b and 11g, so routers that are 11n-ONLY won't respond.
-              //   For this case, the user will see in the UI a message to check credentials. After that, if the user hits
-              //   save and connect again, and the CONNECT_FAILED_AP_TIMEOUT is shown again, Credentials will be saved and
-              //   Tasmota will restart and try to connect in STA mode only (11b/g/n).
-              //
-              //   If it fails again, depending on the WIFICONFIG settings, the user will need to wait or will need to
-              //   push 6 times the button to enable Tasmota AP mode again.
-              if (Web.wifi_test_AP_TIMEOUT) {
-                Web.wifiTest = WIFI_TEST_FINISHED;
-                AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CMND_SSID "1 %s: " D_ATTEMPTING_CONNECTION), SettingsText(SET_STASSID1) );
-                if (MAX_WIFI_OPTION != Web.old_wificonfig) {
-                  TasmotaGlobal.wifi_state_flag = Settings->sta_config = Web.old_wificonfig;
-                }
-                TasmotaGlobal.save_data_counter = Web.save_data_counter;
-                Settings->save_data = Web.save_data_counter;
-                SettingsSaveAll();
-              }
-              Web.wifi_test_AP_TIMEOUT = true;
-          }
-          int n = WiFi.scanNetworks(); // restart scan
-        }
-      }
+//       if (Wifi.initial_config) {
+//         Wifi.config_counter = 200;    // Do not restart the device if it has SSId Blank
+//       }
+//       if (Wifi.wifi_test_counter) {
+//         Wifi.wifi_test_counter--;
+//         AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI D_TRYING_TO_CONNECT " %s"), SettingsText(SET_STASSID1));
+//         if ( WifiCheck_hasIP(WiFi.localIP()) ) {  // Got IP - Connection Established
+//           Wifi.wifi_test_AP_TIMEOUT = false;
+//           Wifi.wifi_test_counter = 0;
+//           Wifi.wifiTest = WIFI_TEST_FINISHED;
+//           AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CMND_SSID "1 %s: " D_CONNECTED " - " D_IP_ADDRESS " %_I"), SettingsText(SET_STASSID1), (uint32_t)WiFi.localIP());
+// //          TasmotaGlobal.blinks = 255;                    // Signal wifi connection with blinks
+//           if (MAX_WIFI_OPTION != Wifi.old_wificonfig) {
+//             TasmotaGlobal.wifi_state_flag = Settings->sta_config = Wifi.old_wificonfig;
+//           }
+//           TasmotaGlobal.save_data_counter = Web.save_data_counter;
+//           Settings->save_data = Web.save_data_counter;
+//           SettingsSaveAll();
+// #if (!RESTART_AFTER_INITIAL_WIFI_CONFIG)
+//           Wifi.initial_config = false;
+//           Web.state = HTTP_ADMIN;
+// #endif
+//         } else if (!Wifi.wifi_test_counter) { // Test TimeOut
+//           Wifi.wifi_test_counter = 0;
+//           Wifi.wifiTest = WIFI_TEST_FINISHED_BAD;
+//           switch (WiFi.status()) {
+//             case WL_CONNECTED:
+//               AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECT_FAILED_NO_IP_ADDRESS));
+//               Wifi.wifi_test_AP_TIMEOUT = false;
+//               break;
+//             case WL_NO_SSID_AVAIL:
+//               AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECT_FAILED_AP_NOT_REACHED));
+//               Wifi.wifi_test_AP_TIMEOUT = false;
+//               break;
+//             case WL_CONNECT_FAILED:
+//               AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECT_FAILED_WRONG_PASSWORD));
+//               Wifi.wifi_test_AP_TIMEOUT = false;
+//               break;
+//             default:  // WL_IDLE_STATUS and WL_DISCONNECTED - SSId in range but no answer from the router
+//               AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECT_FAILED_AP_TIMEOUT));
+//               // If this error occurs twice, Tasmota will connect directly to the router without testing crendentials.
+//               //   ESP8266 in AP+STA mode can manage only 11b and 11g, so routers that are 11n-ONLY won't respond.
+//               //   For this case, the user will see in the UI a message to check credentials. After that, if the user hits
+//               //   save and connect again, and the CONNECT_FAILED_AP_TIMEOUT is shown again, Credentials will be saved and
+//               //   Tasmota will restart and try to connect in STA mode only (11b/g/n).
+//               //
+//               //   If it fails again, depending on the WIFICONFIG settings, the user will need to wait or will need to
+//               //   push 6 times the button to enable Tasmota AP mode again.
+//               if (Wifi.wifi_test_AP_TIMEOUT) {
+//                 Wifi.wifiTest = WIFI_TEST_FINISHED;
+//                 AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CMND_SSID "1 %s: " D_ATTEMPTING_CONNECTION), SettingsText(SET_STASSID1) );
+//                 if (MAX_WIFI_OPTION != Wifi.old_wificonfig) {
+//                   TasmotaGlobal.wifi_state_flag = Settings->sta_config = Wifi.old_wificonfig;
+//                 }
+//                 TasmotaGlobal.save_data_counter = Web.save_data_counter;
+//                 Settings->save_data = Web.save_data_counter;
+//                 SettingsSaveAll();
+//               }
+//               Wifi.wifi_test_AP_TIMEOUT = true;
+//           }
+//           int n = WiFi.scanNetworks(); // restart scan
+//         }
+//       }
       break;
     case FUNC_COMMAND:
       result = DecodeCommand(kWebCommands, WebCommand);

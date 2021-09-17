@@ -42,6 +42,10 @@ const uint8_t WIFI_RETRY_OFFSET_SEC = 12;  // seconds
 #include <AddrList.h>                      // IPv6 DualStack
 #endif  // LWIP_IPV6=1
 
+enum WifiTestOptions {WIFI_NOT_TESTING, WIFI_TESTING, WIFI_TEST_FINISHED, WIFI_TEST_FINISHED_BAD};
+const char* const WifiModes[] = { "--NULL--", "--STA---", "---AP---", "-STA&AP-" };
+const char* const WifiStates[] = { "WL_IDLE_STATUS", "WL_NO_SSID_AVAIL", "WL_SCAN_COMPLETED", "WL_CONNECTED", "WL_CONNECT_FAILED", "WL_CONNECTION_LOST", "WL_DISCONNECTED" };
+
 struct WIFI {
   uint32_t last_event = 0;                 // Last wifi connection event
   uint32_t downtime = 0;                   // Wifi down duration
@@ -56,6 +60,13 @@ struct WIFI {
   uint8_t scan_state;
   uint8_t bssid[6];
   int8_t best_network_db;
+  bool initial_config = false;
+  uint8_t wifiTest = WIFI_NOT_TESTING;
+  uint8_t wifi_test_counter = 0;
+  // uint16_t save_data_counter = 0;
+  uint8_t old_wificonfig = MAX_WIFI_OPTION; // means "nothing yet saved here"
+  bool wifi_test_AP_TIMEOUT = false;
+  uint8_t config_mode = WIFI_STA;
 } Wifi;
 
 int WifiGetRssiAsQuality(int rssi)
@@ -113,8 +124,10 @@ void WifiConfig(uint8_t type)
   }
 }
 
-void WifiSetMode(WiFiMode_t wifi_mode) {
+void WifiSetMode(WiFiMode_t wifi_mode, uint8_t channel) {
+  AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] SetMode 1 %s ch: %d"), WifiModes[WiFi.getMode()], WiFi.channel(), WifiModes[wifi_mode], channel);
   if (WiFi.getMode() == wifi_mode) { return; }
+  AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] SetMode 2 %s ch: %d"), WifiModes[WiFi.getMode()], WiFi.channel(), WifiModes[wifi_mode], channel);
 
   if (wifi_mode != WIFI_OFF) {
     WiFi.hostname(TasmotaGlobal.hostname);  // ESP32 needs this here (before WiFi.mode) for core 2.0.0
@@ -129,6 +142,7 @@ void WifiSetMode(WiFiMode_t wifi_mode) {
     AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI "Retry set Mode..."));
     delay(100);
   }
+  AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] SetMode 3 %s ch: %d"), WifiModes[WiFi.getMode()], WiFi.channel(), WifiModes[wifi_mode], channel);
 
   if (wifi_mode == WIFI_OFF) {
     delay(1000);
@@ -137,6 +151,23 @@ void WifiSetMode(WiFiMode_t wifi_mode) {
   } else {
     delay(30); // Must allow for some time to init.
   }
+
+  AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] SetMode 4 %s ch: %d"), WifiModes[WiFi.getMode()], WiFi.channel(), WifiModes[wifi_mode], channel);
+
+  if (wifi_mode == WIFI_AP || wifi_mode == WIFI_AP_STA) { 
+    if (channel > 0) {
+      WiFi.softAP(TasmotaGlobal.hostname, WIFI_AP_PASSPHRASE, channel, 0, 4);
+      AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] Reset softAP on channel %d (WiFi.channel = %d)"), WifiModes[WiFi.getMode()], WiFi.channel(), channel);
+    } else {
+      WiFi.softAP(TasmotaGlobal.hostname, WIFI_AP_PASSPHRASE, WIFI_SOFT_AP_CHANNEL, 0, 4);
+      AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI "[%s][CH%02d] Reset softAP on channel %d (WiFi.channel = %d)%s"), 
+        WifiModes[WiFi.getMode()], WiFi.channel(), channel, 
+        (wifi_mode == WIFI_AP_STA) ? " WARNING: AP possibly on different channel than STA!" : ""
+      );
+    }  
+  }
+  AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] SetMode 5 %s ch: %d"), WifiModes[WiFi.getMode()], WiFi.channel(), WifiModes[wifi_mode], channel);
+
 }
 
 void WiFiSetSleepMode(void)
@@ -181,6 +212,7 @@ void WiFiSetSleepMode(void)
 
 void WifiBegin(uint8_t flag, uint8_t channel)
 {
+  AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] WifiBegin started with flag %d ch: %d"), WifiModes[WiFi.getMode()], WiFi.channel(), flag, channel);
 #ifdef USE_EMULATION
   UdpDisconnect();
 #endif  // USE_EMULATION
@@ -189,10 +221,12 @@ void WifiBegin(uint8_t flag, uint8_t channel)
   WiFi.disconnect(true);    // Delete SDK wifi config
   delay(200);
 
-  WifiSetMode(WIFI_STA);    // Disable AP mode
+  // WifiSetMode(WIFI_STA);    // Disable AP mode
+  WifiSetMode(WIFI_AP_STA, channel);    // Keep AP mode
+  
   WiFiSetSleepMode();
 //  if (WiFi.getPhyMode() != WIFI_PHY_MODE_11N) { WiFi.setPhyMode(WIFI_PHY_MODE_11N); }  // B/G/N
-//  if (WiFi.getPhyMode() != WIFI_PHY_MODE_11G) { WiFi.setPhyMode(WIFI_PHY_MODE_11G); }  // B/G
+ if (WiFi.getPhyMode() != WIFI_PHY_MODE_11G) { WiFi.setPhyMode(WIFI_PHY_MODE_11G); }  // B/G
   if (!WiFi.getAutoConnect()) { WiFi.setAutoConnect(true); }
 //  WiFi.setAutoReconnect(true);
   switch (flag) {
@@ -238,6 +272,24 @@ void WifiBegin(uint8_t flag, uint8_t channel)
 #endif  // LWIP_IPV6=1
 }
 
+bool WifiIsFallbackAPOnly(void) {
+  AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] WifiIsFallback %d"), WifiModes[WiFi.getMode()], WiFi.channel(), 
+  // AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] WifiIsFallback %d & %d = %d"), WifiModes[WiFi.getMode()], WiFi.channel(), 
+    // ((Settings->wifi_mode == WIFI_STA) || (Settings->wifi_mode == WIFI_AP_STA)),
+    // (Wifi.config_mode == WIFI_AP),
+    (((Settings->wifi_mode == WIFI_STA) || (Settings->wifi_mode == WIFI_AP_STA)) && (Wifi.config_mode == WIFI_AP))
+  );
+  return (((Settings->wifi_mode == WIFI_STA) || (Settings->wifi_mode == WIFI_AP_STA)) && (Wifi.config_mode == WIFI_AP));
+} 
+
+// void WifiScanCallback(int networks) {
+//   AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] Wifi Scan Callback, disabling STA asap if we're in fallback AP-only mode"), WifiModes[WiFi.getMode()], WiFi.channel()); 
+//   if (WifiIsFallbackAPOnly) {
+//     delay(50);
+//     WiFi.enableSTA(false); // setMode causes runtime exception
+//   }
+// }
+
 void WifiBeginAfterScan(void)
 {
   // Not active
@@ -261,7 +313,9 @@ void WifiBeginAfterScan(void)
   // Init scan
   if (3 == Wifi.scan_state) {
     if (WiFi.scanComplete() != WIFI_SCAN_RUNNING) {
+      AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] Scan about to start"), WifiModes[WiFi.getMode()], WiFi.channel());
       WiFi.scanNetworks(true);                      // Start wifi scan async
+      // WiFi.scanNetworksAsync(WifiScanCallback, false);
       Wifi.scan_state++;
       AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "Network (re)scan started..."));
       return;
@@ -281,6 +335,12 @@ void WifiBeginAfterScan(void)
     uint8_t last_bssid[6];                          // Save last bssid
     memcpy((void*) &last_bssid, (void*) &Wifi.bssid, sizeof(last_bssid));
 
+    if (!WifiHasSTAIP() && WifiIsFallbackAPOnly()) { 
+      WifiSetMode(WIFI_AP, WIFI_SOFT_AP_CHANNEL);
+      AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] Scan is ready: reset AP mode (fallback)"), WifiModes[WiFi.getMode()], WiFi.channel());
+    }
+
+    AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] Scan is ready"), WifiModes[WiFi.getMode()], WiFi.channel());
     if (wifi_scan_result > 0) {
       // Networks found
       for (uint32_t i = 0; i < wifi_scan_result; ++i) {
@@ -325,12 +385,16 @@ void WifiBeginAfterScan(void)
       delay(0);
     }
     Wifi.scan_state = 0;
-    // If bssid changed then (re)connect wifi
-    for (uint32_t i = 0; i < sizeof(Wifi.bssid); i++) {
-      if (last_bssid[i] != Wifi.bssid[i]) {
-        WifiBegin(ap, channel);                     // 0 (AP1), 1 (AP2) or 3 (default AP)
-        break;
-      }
+    // char hex_char2[18];
+    // AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] Last BSSID %s, Selected BSSID %s, AP=%d, channel=%d"), WifiModes[WiFi.getMode()], WiFi.channel(),
+    //   ToHex_P((unsigned char*)last_bssid, 6, hex_char2, sizeof(hex_char2), ':'),
+    //   ToHex_P((unsigned char*)Wifi.bssid, 6, hex_char2, sizeof(hex_char2), ':'), ap, channel
+    // );
+    
+    if (memcmp(last_bssid,Wifi.bssid,sizeof(Wifi.bssid))) { // If bssid changed then (re)connect wifi
+      WifiBegin(ap, channel);                     // 0 (AP1), 1 (AP2) or 3 (default AP)
+    } else if (ap != 3 && !WifiHasSTAIP() && (WiFi.getMode() == WIFI_AP_STA || WiFi.getMode() == WIFI_STA)) { // or we're in fallback AP and should connect
+      WifiBegin(ap, channel);
     }
   }
 }
@@ -383,13 +447,23 @@ inline bool WifiCheck_hasIP(IPAddress const & ip_address)
 #endif
 }
 
+bool WifiHasSTAIP() {
+  return ((WL_CONNECTED == WiFi.status()) && WifiCheck_hasIP(WiFi.localIP()));
+}
+
+bool WifiHasAPIP() {
+  return ((WiFi.getMode() == WIFI_AP_STA || WiFi.getMode() == WIFI_AP) && WifiCheck_hasIP(WiFi.softAPIP()));
+}
+
 void WifiCheckIp(void)
 {
-  if ((WL_CONNECTED == WiFi.status()) && WifiCheck_hasIP(WiFi.localIP())) {
+  AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI "[%s][CH%02d] Check init - WifiHasSTAIP %d"),WifiModes[WiFi.getMode()], WiFi.channel(), WifiHasSTAIP());
+  if (WifiHasSTAIP()) {
     WifiSetState(1);
     Wifi.counter = WIFI_CHECK_SEC;
     Wifi.retry = Wifi.retry_init;
     Wifi.max_retry = 0;
+    Wifi.config_mode = Settings->wifi_mode;
     if (Wifi.status != WL_CONNECTED) {
       AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECTED));
 //      AddLog(LOG_LEVEL_INFO, PSTR("Wifi: Set IP addresses"));
@@ -405,11 +479,40 @@ void WifiCheckIp(void)
     }
     Wifi.status = WL_CONNECTED;
   } else {
+    AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI "[%s][CH%02d] No STA connection : WiFi.status %d : counter %d : config_counter %d : retry %d : retry_init %d : scan_state %d : wifi_down %d, WiFi.softAPIP %_I, WiFi.scanComplete %d, WiFi.connected %d"),
+      WifiModes[WiFi.getMode()], WiFi.channel(), WiFi.status(), Wifi.counter, Wifi.config_counter, Wifi.retry, Wifi.retry_init, Wifi.scan_state, TasmotaGlobal.global_state.wifi_down, (uint32_t)WiFi.softAPIP(), WiFi.scanComplete(), WiFi.isConnected()
+    );
+    switch (Settings->wifi_mode) {
+      case WIFI_STA: // we're disconnected from STAtion and should retry according to retry logic until (if connection fails) we fallback to WIFI_MANAGER mode
+        WifiSetState(0); 
     WifiSetState(0);
+        WifiSetState(0); 
+        break;
+      case WIFI_AP_STA: //we're disconnected from STAtion and fallback to AP-only and keep scanning and trying to reconnect if any of the configured AP are found (no fallback to WIFI_MANAGER)
+      // https://esp32.com/viewtopic.php?t=1192
+      /* by ESP_igrr » Thu Feb 16, 2017 10:38 am
+      This is expected behaviour I think, and the same happens on the ESP8266.
+      In order to connect to an AP as a station, the chip needs to scan channels. Because the chip can only work on one channel at any given moment, 
+      this will cause loss of connection on the channel where other stations are expecting to see the ESP SoftAP.
+      If the channel of the external AP is different from the initial channel of the ESP32 SoftAP, ESP32 will change the channel of SoftAP 
+      to match the channel of the external AP (so it can run as both AP and STA on the same channel). This will cause external devices connected to the ESP32 
+      to temporarily loose connection (until they do a new scan and reconnect to the SoftAP on the new channel).
+      */
+        AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI "[%s][CH%02d] Falling back from WIFI_AP_STA -> WIFI_AP"), WifiModes[WiFi.getMode()], WiFi.channel());
+        Settings->flag3.use_wifi_scan = true; // always scan first and only reconnect if the AP1/AP2 SSID are found. Scanning (and connecting) changes the one (and only) wifi channel so the AP-mode client may need to reconnect.
+        Settings->sta_config = WIFI_WAIT; // not really sure exactly what this state means but it leads into the 'scan -> begin -> reconnect'-path if Settings->flag3.use_wifi_scan is true
+        Wifi.config_mode = WIFI_AP; // fallback Wifi.config_mode intetionally not equal to persisted Settings->wifi_mode, on restart the Settings->wifi_mode is initially active
+        break;
+      case WIFI_AP: // we're configured to stay indefinately in AP-mode
+        // TODO: this should halt all attempts at trying to (re)connect to a station
+        // maybe just return from this WifiCheckIp here
+        break;
+    }
     uint8_t wifi_config_tool = Settings->sta_config;
     Wifi.status = WiFi.status();
-    switch (Wifi.status) {
-      case WL_CONNECTED:
+    if (!Wifi.scan_state) {  // skip the checks when scanning
+    switch (Wifi.status ) {
+      case WL_CONNECTED: // No static IP defined or dhcp failed
         AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI D_CONNECT_FAILED_NO_IP_ADDRESS));
         Wifi.status = 0;
         Wifi.retry = Wifi.retry_init;
@@ -452,20 +555,25 @@ void WifiCheckIp(void)
             wifi_config_tool = WIFI_MANAGER;  // Skip empty SSIDs and start Wifi config tool
             Wifi.retry = 0;
           } else {
-            AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI D_ATTEMPTING_CONNECTION));
+            AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] " D_ATTEMPTING_CONNECTION " Retry: %d, RetryInit: %d, RetryMax: %d, Counter %d"), WifiModes[WiFi.getMode()], WiFi.channel(), Wifi.retry, Wifi.retry_init, Wifi.max_retry, Wifi.counter);
           }
         }
+    }
+
     }
     if (Wifi.retry) {
       if (Settings->flag3.use_wifi_scan) {  // SetOption56 - Scan wifi network at restart for configured AP's
         if (Wifi.retry_init == Wifi.retry) {
+          AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] Scan starting - Retry: %d, RetryInit: %d, RetryMax: %d, Counter %d"), WifiModes[WiFi.getMode()], WiFi.channel(), Wifi.retry, Wifi.retry_init, Wifi.max_retry, Wifi.counter);
           Wifi.scan_state = 1;    // Select scanned SSID
         }
       } else {
         if (Wifi.retry_init == Wifi.retry) {
+          AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] WifiBegin DefaultSSID: 3 channel %d - Retry: %d, RetryInit: %d, RetryMax: %d, Counter %d"), WifiModes[WiFi.getMode()], WiFi.channel(), Settings->wifi_channel, Wifi.retry, Wifi.retry_init, Wifi.max_retry, Wifi.counter);
           WifiBegin(3, Settings->wifi_channel);  // Select default SSID
         }
         if ((Settings->sta_config != WIFI_WAIT) && ((Wifi.retry_init / 2) == Wifi.retry)) {
+          AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "[%s][CH%02d] WifiBegin AlternateSSID: 2 channel 0 - Retry: %d, RetryInit: %d, RetryMax: %d, Counter %d"), WifiModes[WiFi.getMode()], WiFi.channel(), Settings->wifi_channel, Wifi.retry, Wifi.retry_init, Wifi.max_retry, Wifi.counter);
           WifiBegin(2, 0);        // Select alternate SSID
         }
       }
@@ -511,11 +619,11 @@ void WifiCheck(uint8_t param)
       if (Wifi.scan_state) { WifiBeginAfterScan(); }
 
       if (Wifi.counter <= 0) {
-        AddLog(LOG_LEVEL_DEBUG_MORE, PSTR(D_LOG_WIFI D_CHECKING_CONNECTION));
+        AddLog(LOG_LEVEL_DEBUG_MORE, PSTR(D_LOG_WIFI "[%s][CH%02d] " D_CHECKING_CONNECTION),WifiModes[WiFi.getMode()], WiFi.channel());
         Wifi.counter = WIFI_CHECK_SEC;
         WifiCheckIp();
       }
-      if ((WL_CONNECTED == WiFi.status()) && WifiCheck_hasIP(WiFi.localIP()) && !Wifi.config_type) {
+      if ((WifiHasSTAIP() || WifiHasAPIP()) && !Wifi.config_type) {
         WifiSetState(1);
         if (Settings->flag3.use_wifi_rescan) {  // SetOption57 - Scan wifi network every 44 minutes for configured AP's
           if (!(TasmotaGlobal.uptime % (60 * WIFI_RESCAN_MINUTES))) {
@@ -596,6 +704,14 @@ void WifiConnect(void)
 
   memcpy((void*) &Wifi.bssid, (void*) Settings->wifi_bssid, sizeof(Wifi.bssid));
 
+  delay(5000);
+  AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI "Settings->wifi_mode : %d "), Settings->wifi_mode ? Settings->wifi_mode : -1);
+  if (!Settings->wifi_mode) {
+    Settings->wifi_mode= WIFI_STA;
+    AddLog(LOG_LEVEL_INFO, PSTR(D_LOG_WIFI "Settings->wifi_mode is not set, using 'WIFI_STA'"));
+  } 
+  Wifi.config_mode = Settings->wifi_mode;
+
 #ifdef WIFI_RF_PRE_INIT
   if (rf_pre_init_flag) {
     AddLog(LOG_LEVEL_DEBUG, PSTR(D_LOG_WIFI "Pre-init done"));
@@ -641,7 +757,7 @@ void WifiShutdown(bool option = false)
 void WifiDisable(void) {
   if (!TasmotaGlobal.global_state.wifi_down) {
     WifiShutdown();
-    WifiSetMode(WIFI_OFF);
+    WifiSetMode(WIFI_OFF, 0);
   }
   TasmotaGlobal.global_state.wifi_down = 1;
 }
@@ -717,7 +833,7 @@ void WifiPollNtp() {
   static uint8_t ntp_sync_minute = 0;
   static uint32_t ntp_run_time = 0;
 
-  if (TasmotaGlobal.global_state.network_down || Rtc.user_time_entry) { return; }
+  if (true || TasmotaGlobal.global_state.network_down || Rtc.user_time_entry) { return; }
 
   uint8_t uptime_minute = (TasmotaGlobal.uptime / 60) % 60;  // 0 .. 59
   if ((ntp_sync_minute > 59) && (uptime_minute > 2)) {

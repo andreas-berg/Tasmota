@@ -303,6 +303,7 @@
 #define D_CMND_SSID "SSId"
 #define D_CMND_PASSWORD "Password"
 #define D_CMND_HOSTNAME "Hostname"
+#define D_CMND_WIFIMODE "WifiMode"
 #define D_CMND_WIFI "Wifi"
 #define D_CMND_ETHERNET "Ethernet"
 #define D_CMND_WIFICONFIG "WifiConfig"
